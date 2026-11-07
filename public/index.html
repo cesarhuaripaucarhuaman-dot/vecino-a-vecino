@@ -101,7 +101,7 @@ function seed(){
   var t=Date.now();
   return{mode:"normal",tab:"serv",name:"",me:"u"+Math.random().toString(36).slice(2,9),pos:null,items:L.map(function(x,i){return{id:"s"+i,type:x[0],title:x[1],cat:x[2],desc:x[3],lat:x[4].lat,lng:x[4].lng,by:"Vecino",av:x[5],pend:false,ts:t-i*3600000,helpers:[],tel:""}})}
 }
-S=load()||seed();
+S=load()||seed();S.dels=S.dels||[];S.lastAlert=S.lastAlert||"";
 function dist(a,b){var R=6371000,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lng-a.lng)*r;var h=Math.sin(dl/2)*Math.sin(dl/2)+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)*Math.sin(dn/2);return 2*R*Math.asin(Math.sqrt(h))}
 function me(){return S.pos||BASE}
 function fd(m){return m<1000?Math.max(10,Math.round(m/10)*10)+" m":(m/1000).toFixed(1)+" km"}
@@ -114,13 +114,56 @@ function locate(cb){
 }
 function sync(){
   if(!online())return;
-  var n=pend(),before=JSON.stringify(S.items);
-  fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:S.items})}).then(function(r){return r.json()}).then(function(d){
-    S.items=d.items.map(function(i){i.pend=false;i.helpers=i.helpers||[];i.av=i.av||[];return i});save();
+  var n=pend(),before=JSON.stringify(S.items),sent=S.dels.slice();
+  fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:S.items,dels:sent,owner:S.me})}).then(function(r){return r.json()}).then(function(d){
+    S.items=d.items.map(function(i){i.pend=false;i.helpers=i.helpers||[];i.av=i.av||[];return i});
+    S.dels=S.dels.filter(function(x){return sent.indexOf(x)<0});save();
     if(n)toast("Se sincronizaron "+n+" publicaciones");
+    if(d.alert)gotAlert(d.alert);
     if(n||before!==JSON.stringify(S.items))draw()
   }).catch(function(){
     if(pend()){S.items.forEach(function(i){i.pend=false});save();toast("Publicaciones guardadas en este teléfono");draw()}
+  })
+}
+function vib(){try{if(navigator.vibrate)navigator.vibrate([500,200,500,200,500,200,800])}catch(e){}}
+function showNote(t,b){
+  if(!("Notification" in window)||Notification.permission!=="granted"||!navigator.serviceWorker)return;
+  navigator.serviceWorker.ready.then(function(r){r.showNotification(t,{body:b,vibrate:[500,200,500,200,500],tag:"alerta",requireInteraction:true,icon:"icon.svg"})}).catch(function(){})
+}
+function gotAlert(a){
+  if(!a||a.id===S.lastAlert)return;
+  S.lastAlert=a.id;save();
+  if(a.owner===S.me||Date.now()-a.ts>600000)return;
+  vib();showNote("🚨 Alerta vecinal",a.msg);
+  document.getElementById("ov").innerHTML='<div class="modal" style="align-items:center;padding:16px"><div class="sheet" role="alertdialog" aria-label="Alerta de emergencia" style="border-radius:28px"><h2 style="margin-top:0;color:var(--sos)">🚨 Alerta de emergencia</h2><p>'+esc(a.msg)+'</p><button class="p" id="goe" style="width:100%;min-height:58px;background:var(--sos);border-color:var(--sos);color:#fff">Ver ayuda urgente</button><button id="cl" style="width:100%;margin-top:10px">Cerrar</button></div></div>'
+}
+function sendAlert(){
+  var a={id:"a"+Date.now(),owner:S.me,msg:(S.name||"Un vecino")+" activó la emergencia. Abre la app para ayudar."};
+  S.lastAlert=a.id;save();
+  fetch("api/alert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(a)}).then(function(r){return r.json()}).then(function(d){toast(d.ok?"Aviso enviado a tus vecinos":"Ya se envió un aviso hace instantes")}).catch(function(){toast("No se pudo avisar a los vecinos. Llama a emergencias.")})
+}
+function setEm(on,al){S.mode=on?"emergency":"normal";S.tab=on?"sos":"serv";save();if(on&&al)sendAlert();draw();window.scrollTo(0,0)}
+function askEm(){
+  var ov=document.getElementById("ov");
+  ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Activar emergencia"><h2 style="margin-top:0">Activar emergencia</h2><p class="m">Si avisas, los teléfonos de tus vecinos vibrarán y recibirán una notificación. Úsalo solo en una emergencia real.</p><button class="big" id="e1" style="border-color:var(--sos)"><b>🚨</b>Activar y avisar a mis vecinos</button><button class="big" id="e2"><b>🔕</b>Solo activar para mí</button><button class="big" id="e3" style="min-height:52px">Cancelar</button></div></div>';
+  document.getElementById("e1").onclick=function(){ov.innerHTML="";setEm(true,true)};
+  document.getElementById("e2").onclick=function(){ov.innerHTML="";setEm(true,false)};
+  document.getElementById("e3").onclick=function(){ov.innerHTML=""}
+}
+function b64(s){var p="=".repeat((4-s.length%4)%4),r=atob((s+p).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from(r,function(c){return c.charCodeAt(0)})}
+function pushSub(){
+  if(!("serviceWorker" in navigator)||!("PushManager" in window))return Promise.resolve(false);
+  return fetch("api/config").then(function(r){return r.json()}).then(function(c){
+    if(!c.key)return false;
+    return navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription().then(function(x){return x||reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(c.key)})})}).then(function(x){return fetch("api/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sub:x})}).then(function(){return true})})
+  }).catch(function(){return false})
+}
+function enableAlerts(){
+  if(!("Notification" in window)){toast("Para recibir avisos instala la app (Agregar a inicio)");return}
+  Notification.requestPermission().then(function(p){
+    if(p!=="granted"){toast("Sin permiso no podremos avisarte. Actívalo en los ajustes del navegador.");return}
+    S.alerts=true;save();
+    pushSub().then(function(ok){toast(ok?"Avisos activados ✓":"Avisos activados mientras la app esté abierta");draw()})
   })
 }
 function sorted(type,filter){
@@ -132,7 +175,7 @@ function contact(i){
 }
 function card(i,acts,badges){
   var ok=i.av.length>=3;
-  return '<article class="card"><div class="top"><div class="ic" aria-hidden="true">'+icon(i.cat,i.type)+'</div><div class="sp"><h3>'+esc(i.title)+'</h3><div class="m">'+esc(i.cat)+" · a "+fd(i._d)+'</div></div></div><p style="margin:10px 0 0">'+esc(i.desc)+'</p><div>'+(ok?'<span class="badge vb">★ Visto Bueno Vecinal</span>':"")+(badges||"")+(i.pend?'<span class="badge w">Por enviar</span>':"")+'</div><div class="act">'+acts+contact(i)+'</div></article>'
+  return '<article class="card"><div class="top"><div class="ic" aria-hidden="true">'+icon(i.cat,i.type)+'</div><div class="sp"><h3>'+esc(i.title)+'</h3><div class="m">'+esc(i.cat)+" · a "+fd(i._d)+'</div></div></div><p style="margin:10px 0 0">'+esc(i.desc)+'</p><div>'+(ok?'<span class="badge vb">★ Visto Bueno Vecinal</span>':"")+(badges||"")+(i.pend?'<span class="badge w">Por enviar</span>':"")+'</div><div class="act">'+acts+contact(i)+(i.owner===S.me?'<button data-del="'+i.id+'" style="border-color:var(--sos);color:var(--sos)">🗑 Borrar</button>':"")+'</div></article>'
 }
 function vServ(){
   var em=S.mode==="emergency";
@@ -185,7 +228,7 @@ function vInv(){
 }
 function vHelp(){
   var s=[["🔍","Busca","En Servicios encuentras oficios ordenados por cercanía."],["★","Confía","Con 3 o más Vistos Buenos de vecinos, un servicio recibe la estrella dorada."],["🤝","Ayuda","En Favores presta, pide o intercambia sin dinero."],["＋","Publica en 3 toques","Toca Publicar, elige qué quieres hacer y toca Publicar otra vez."],["🚨","Emergencia","Activa el interruptor de arriba: solo verás servicios críticos y pedidos de ayuda."],["📶","Sin internet","Todo se guarda en tu teléfono y se envía solo cuando vuelve la conexión."]];
-  return '<h2>Cómo usar la app</h2>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act"><button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button></div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
+  return '<h2>Cómo usar la app</h2>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act">'+(("Notification" in window&&Notification.permission==="granted")?'<span class="badge">🔔 Avisos activados</span>':'<button class="p" id="notif">🔔 Activar avisos de emergencia</button>')+'<button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button></div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
 }
 function drawQR(){
   var b=document.getElementById("qr"),u=document.getElementById("u");
@@ -214,7 +257,7 @@ function draw(){
 function welcome(){
   var ov=document.getElementById("ov");
   ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Bienvenida"><h2 style="margin-top:0">¡Bienvenido, vecino!</h2><p class="m">Encuentra oficios recomendados, pide o da ayuda y avisa en emergencias. Funciona aunque no tengas internet.</p><label for="nm">¿Cómo te llamas?</label><input id="nm" maxlength="30" placeholder="Tu nombre o apodo"><button class="p" id="go" style="width:100%;min-height:56px">Empezar</button></div></div>';
-  document.getElementById("go").onclick=function(){S.name=document.getElementById("nm").value.trim()||"vecino";save();ov.innerHTML="";S.tab="help";draw()}
+  document.getElementById("go").onclick=function(){S.name=document.getElementById("nm").value.trim()||"vecino";save();ov.innerHTML="";S.tab="help";draw();if("Notification" in window)enableAlerts()}
 }
 function openAdd(){
   var ov=document.getElementById("ov"),em=S.mode==="emergency";
@@ -232,7 +275,7 @@ function openAdd(){
       var t=document.getElementById("f1").value.trim();
       if(!t){toast("Escribe un título para publicar");return}
       var m=me();
-      S.items.push({id:"u"+Date.now(),type:k,title:t,cat:document.getElementById("f2").value,desc:document.getElementById("f3").value.trim(),tel:document.getElementById("f4").value.trim(),lat:Math.round(m.lat*1000)/1000,lng:Math.round(m.lng*1000)/1000,by:S.name||"Vecino",av:[],pend:!online(),ts:Date.now(),helpers:[]});
+      S.items.push({id:"u"+Date.now(),type:k,title:t,cat:document.getElementById("f2").value,desc:document.getElementById("f3").value.trim(),tel:document.getElementById("f4").value.trim(),lat:Math.round(m.lat*1000)/1000,lng:Math.round(m.lng*1000)/1000,by:S.name||"Vecino",owner:S.me,av:[],pend:!online(),ts:Date.now(),helpers:[]});
       save();ov.innerHTML="";S.tab=k;
       toast(online()?"Publicado ✓":"Guardado. Se enviará cuando haya internet");draw();sync()
     }
@@ -246,7 +289,11 @@ document.addEventListener("click",function(e){
   else if(t.dataset.av){S.items.forEach(function(i){if(i.id===t.dataset.av&&i.av.indexOf(S.me)<0)i.av.push(S.me)});save();toast("Gracias por tu Visto Bueno");draw();sync()}
   else if(t.dataset.help){S.items.forEach(function(i){if(i.id===t.dataset.help&&i.helpers.indexOf(S.me)<0)i.helpers.push(S.me)});save();toast("Gracias. El vecino será avisado");draw();sync()}
   else if(t.id==="add")openAdd();
-  else if(t.id==="emg"){S.mode=S.mode==="emergency"?"normal":"emergency";S.tab=S.mode==="emergency"?"sos":"serv";save();draw();window.scrollTo(0,0)}
+  else if(t.dataset.del){if(confirm("¿Borrar esta publicación para todos?")){var id=t.dataset.del;S.items=S.items.filter(function(i){return i.id!==id});S.dels.push(id);save();toast("Publicación borrada");draw();sync()}}
+  else if(t.id==="notif")enableAlerts();
+  else if(t.id==="goe"){document.getElementById("ov").innerHTML="";setEm(true,false)}
+  else if(t.id==="cl")document.getElementById("ov").innerHTML="";
+  else if(t.id==="emg"){if(S.mode==="emergency")setEm(false,false);else askEm()}
   else if(t.id==="sim"){forceOff=!forceOff;if(!forceOff)sync();draw()}
   else if(t.id==="loc")locate(function(ok){toast(ok?"Ubicación actualizada":"No se pudo obtener la ubicación");draw()})
   else if(t.id==="rst"){if(confirm("¿Borrar todo y volver a los datos de ejemplo?")){var n=S.name;S=seed();S.name=n;save();draw()}}
@@ -258,6 +305,7 @@ window.addEventListener("online",function(){sync();draw()});
 window.addEventListener("offline",draw);
 draw();sync();setInterval(sync,15000);
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(function(){});
+if(S.alerts&&"Notification" in window&&Notification.permission==="granted")pushSub();
 locate(function(ok){if(ok)draw()});
 if(!S.name)welcome();
 })();
