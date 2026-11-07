@@ -8,15 +8,17 @@ const PORT=process.env.PORT||3000,DB=path.join(__dirname,"data.json"),PUB=path.j
 const TYPES={".html":"text/html; charset=utf-8",".js":"text/javascript",".json":"application/json",".svg":"image/svg+xml"};
 let db={items:[],subs:[],dead:[],alert:null,};
 try{const j=JSON.parse(fs.readFileSync(DB,"utf8"));db=Object.assign(db,Array.isArray(j)?{items:j}:j)}catch(e){}
+db.items=db.items.filter(x=>!/^s\d+$/.test(x.id));
 const save=()=>{try{fs.writeFileSync(DB,JSON.stringify(db))}catch(e){}};
+const RK=["nuevo","encamino","resuelto"];
 const union=(a,b)=>[...new Set([...(a||[]),...(b||[])])];
 const S=(v,n)=>String(v==null?"":v).slice(0,n);
 function merge(inc){
   for(const it of inc){
-    if(!it||typeof it.id!=="string"||typeof it.title!=="string"||db.dead.includes(it.id))continue;
-    const c={id:S(it.id,40),type:["serv","favor","sos"].includes(it.type)?it.type:"serv",title:S(it.title,80),cat:S(it.cat,30),desc:S(it.desc,240),tel:S(it.tel,20),lat:+it.lat||0,lng:+it.lng||0,by:S(it.by,30),owner:S(it.owner,30),av:union(it.av,[]).slice(0,200),helpers:union(it.helpers,[]).slice(0,200),ts:+it.ts||Date.now(),pend:false};
+    if(!it||typeof it.id!=="string"||typeof it.title!=="string"||db.dead.includes(it.id)||/^s\d+$/.test(it.id))continue;
+    const c={id:S(it.id,40),type:["serv","prod","favor","sos","rec"].includes(it.type)?it.type:"serv",title:S(it.title,80),cat:S(it.cat,30),desc:S(it.desc,240),tel:S(it.tel,20),lat:+it.lat||0,lng:+it.lng||0,by:S(it.by,30),owner:S(it.owner,30),zone:S(it.zone,30),kind:["Ofrezco","Necesito"].includes(it.kind)?it.kind:"",emerg:!!it.emerg,status:RK.includes(it.status)?it.status:"nuevo",av:union(it.av,[]).slice(0,200),helpers:union(it.helpers,[]).slice(0,200),ts:+it.ts||Date.now(),pend:false};
     const cur=db.items.find(x=>x.id===c.id);
-    if(cur){cur.av=union(cur.av,c.av);cur.helpers=union(cur.helpers,c.helpers)}else db.items.push(c);
+    if(cur){cur.av=union(cur.av,c.av);cur.helpers=union(cur.helpers,c.helpers);if(RK.indexOf(c.status)>RK.indexOf(cur.status||"nuevo"))cur.status=c.status}else db.items.push(c);
   }
 }
 function remove(ids,owner){
