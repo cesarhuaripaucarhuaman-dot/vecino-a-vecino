@@ -60,6 +60,12 @@ nav button.on{background:var(--pri2);color:var(--pri)}
 .qr{background:#fff;padding:14px;border-radius:20px;max-width:260px;margin:12px auto}.qr svg{width:100%;height:auto;display:block}
 .step{display:flex;gap:12px;margin:0 0 12px}.step i{font-style:normal;width:34px;height:34px;border-radius:50%;background:var(--pri);color:var(--on);display:grid;place-items:center;font-weight:800;flex:none}
 svg.rd{width:100%;height:auto;max-height:300px}
+.guide{width:60px;height:60px;border-radius:50%;background:var(--pri2);display:grid;place-items:center;font-size:2.1rem;flex:none}
+.bubble{background:var(--card);border:2px solid var(--line);border-radius:22px;padding:16px;margin:12px 0;text-align:center}
+.bubble h2{margin:4px 0;font-size:1.4rem}.bubble p{font-size:1.1rem;margin:6px 0 12px}
+.dots{display:flex;gap:6px;justify-content:center}.dots i{width:10px;height:10px;border-radius:50%;background:var(--line)}.dots i.on{background:var(--pri);width:28px;border-radius:6px}
+.demo{pointer-events:none;text-align:left}
+.sm{min-height:44px;padding:4px 12px;font-size:.9rem}
 </style>
 </head>
 <body>
@@ -228,7 +234,7 @@ function vInv(){
 }
 function vHelp(){
   var s=[["🔍","Busca","En Servicios encuentras oficios ordenados por cercanía."],["★","Confía","Con 3 o más Vistos Buenos de vecinos, un servicio recibe la estrella dorada."],["🤝","Ayuda","En Favores presta, pide o intercambia sin dinero."],["＋","Publica en 3 toques","Toca Publicar, elige qué quieres hacer y toca Publicar otra vez."],["🚨","Emergencia","Activa el interruptor de arriba: solo verás servicios críticos y pedidos de ayuda."],["📶","Sin internet","Todo se guarda en tu teléfono y se envía solo cuando vuelve la conexión."]];
-  return '<h2>Cómo usar la app</h2>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act">'+(("Notification" in window&&Notification.permission==="granted")?'<span class="badge">🔔 Avisos activados</span>':'<button class="p" id="notif">🔔 Activar avisos de emergencia</button>')+'<button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button></div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
+  return '<h2>Cómo usar la app</h2><button class="p" id="tourbtn" style="width:100%;min-height:56px;margin:8px 0 14px">▶ Ver tutorial con voz</button>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act">'+(("Notification" in window&&Notification.permission==="granted")?'<span class="badge">🔔 Avisos activados</span>':'<button class="p" id="notif">🔔 Activar avisos de emergencia</button>')+'<button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button></div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
 }
 function drawQR(){
   var b=document.getElementById("qr"),u=document.getElementById("u");
@@ -254,10 +260,50 @@ function draw(){
   if(qi)qi.oninput=function(){q=qi.value;var pos=qi.selectionStart;draw();var n2=document.getElementById("q");n2.focus();n2.setSelectionRange(pos,pos)};
   drawQR()
 }
+var TOUR=[
+ {e:"👵",t:"¡Hola, soy Doña Lupe!",x:"Esta aplicación une a los vecinos del barrio. Te explico todo en un minuto. Es muy fácil.",tab:"serv",d:""},
+ {e:"🛠️",t:"Encuentra servicios cerca",x:"En Servicios ves gasfiteros, electricistas, clases y más, del más cercano al más lejano. Toca una categoría, o escribe en el buscador.",tab:"serv",d:'<div class="chips"><button class="on">🔧 Gasfitería</button><button>💡 Electricidad</button><button>📚 Clases</button></div>'},
+ {e:"⭐",t:"Confía en la estrella dorada",x:"Cuando tres o más vecinos recomiendan un servicio, aparece la estrella dorada. Si te atendieron bien, toca Dar Visto Bueno para ayudar a los demás.",tab:"serv",d:'<span class="badge vb">★ Visto Bueno Vecinal</span><div class="act"><button>👍 Dar Visto Bueno</button></div>'},
+ {e:"🤝",t:"Favores sin dinero",x:"En Favores los vecinos se ayudan: prestan herramientas, cambian clases o ayudan con una mudanza. Toca Puedo ayudar para apuntarte.",tab:"favor",d:'<span class="badge">Ofrece ayuda</span><span class="badge">Pide ayuda</span><div class="act"><button>Puedo ayudar</button></div>'},
+ {e:"＋",t:"Publicar es solo tres toques",x:"Primero toca Publicar. Luego elige qué quieres hacer. Por último escribe y toca Publicar otra vez. Lo que publiques, lo puedes borrar con el botón rojo Borrar.",tab:"serv",d:'<div class="step"><i>1</i><div>Toca <b>＋ Publicar</b></div></div><div class="step"><i>2</i><div>Elige qué quieres hacer</div></div><div class="step" style="margin:0"><i>3</i><div>Escribe y toca <b>Publicar</b></div></div>'},
+ {e:"🚨",t:"En una emergencia",x:"Si hay una emergencia, activa el interruptor de arriba. Puedes avisar a todos tus vecinos y sus teléfonos vibrarán. En Ayuda urgente ves quién necesita ayuda, y tocas Voy a ayudar.",tab:"sos",d:'<div class="banner" style="margin:0">🚨 Emergencia ACTIVADA</div>'},
+ {e:"📶",t:"Funciona sin internet",x:"Si te quedas sin internet, la app sigue funcionando. Lo que publiques se guarda y se envía solo cuando vuelva la conexión. Para invitar a un vecino, muéstrale el código QR de la pestaña Invitar.",tab:"inv",d:'<span class="pill" style="background:var(--pri2);color:var(--pri)">○ Sin conexión · 1 por enviar</span>'}
+];
+function say(t){
+  if(!window.speechSynthesis||S.voice===false)return;
+  try{
+    speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(t),v=speechSynthesis.getVoices().filter(function(x){return /^es/i.test(x.lang)});
+    var pick=v.filter(function(x){return /es[-_](US|MX|419|PE|CO|AR)/i.test(x.lang)})[0]||v[0];
+    u.lang="es-419";u.rate=.92;u.pitch=1.05;
+    if(pick){u.voice=pick;u.lang=pick.lang}
+    speechSynthesis.speak(u)
+  }catch(e){}
+}
+function endTour(){
+  try{window.speechSynthesis&&speechSynthesis.cancel()}catch(e){}
+  document.getElementById("ov").innerHTML="";S.toured=true;S.tab="serv";save();draw();window.scrollTo(0,0)
+}
+function tour(i){
+  var ov=document.getElementById("ov"),st=TOUR[i],last=i===TOUR.length-1,can=!!window.speechSynthesis;
+  S.tab=st.tab;draw();
+  var dots=TOUR.map(function(_,k){return '<i class="'+(k===i?"on":"")+'"></i>'}).join("");
+  ov.innerHTML='<div class="modal" style="align-items:center;padding:12px"><div class="sheet" role="dialog" aria-label="Tutorial" style="border-radius:28px;max-height:96%"><div class="row"><div class="guide" aria-hidden="true">👵</div><div class="sp"><b>Doña Lupe te explica</b><div class="m">Paso '+(i+1)+' de '+TOUR.length+'</div></div><button class="sm" id="tskip">Saltar</button></div><div class="dots" style="margin-top:12px" aria-hidden="true">'+dots+'</div><div class="bubble"><div style="font-size:2.6rem" aria-hidden="true">'+st.e+'</div><h2>'+st.t+'</h2><p>'+st.x+'</p><div class="demo">'+st.d+'</div>'+(can?'<div class="act" style="justify-content:center"><button class="sm" id="trep">🔊 Escuchar otra vez</button><button class="sm" id="tvoice">'+(S.voice===false?"🔇 Voz apagada":"Voz encendida")+'</button></div>':"")+'</div>'+(last?'<button id="tnot" style="width:100%;margin-bottom:10px">🔔 Activar avisos de emergencia</button>':"")+'<div class="row"><button id="tprev" '+(i?"":"disabled")+'>Atrás</button><button class="p sp" id="tnext" style="min-height:56px;font-size:1.1rem">'+(last?"¡Listo, a usar!":"Siguiente")+'</button></div></div></div>';
+  function $(id){return document.getElementById(id)}
+  $("tskip").onclick=endTour;
+  $("tnext").onclick=function(){last?endTour():tour(i+1)};
+  $("tprev").onclick=function(){if(i)tour(i-1)};
+  if(last)$("tnot").onclick=enableAlerts;
+  if(can){
+    $("trep").onclick=function(){say(st.t+". "+st.x)};
+    $("tvoice").onclick=function(){S.voice=S.voice===false;save();if(S.voice===false){speechSynthesis.cancel()}else say(st.t+". "+st.x);tour(i)}
+  }
+  say(st.t+". "+st.x)
+}
 function welcome(){
   var ov=document.getElementById("ov");
   ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Bienvenida"><h2 style="margin-top:0">¡Bienvenido, vecino!</h2><p class="m">Encuentra oficios recomendados, pide o da ayuda y avisa en emergencias. Funciona aunque no tengas internet.</p><label for="nm">¿Cómo te llamas?</label><input id="nm" maxlength="30" placeholder="Tu nombre o apodo"><button class="p" id="go" style="width:100%;min-height:56px">Empezar</button></div></div>';
-  document.getElementById("go").onclick=function(){S.name=document.getElementById("nm").value.trim()||"vecino";save();ov.innerHTML="";S.tab="help";draw();if("Notification" in window)enableAlerts()}
+  document.getElementById("go").onclick=function(){S.name=document.getElementById("nm").value.trim()||"vecino";save();ov.innerHTML="";S.tab="serv";draw();tour(0)}
 }
 function openAdd(){
   var ov=document.getElementById("ov"),em=S.mode==="emergency";
@@ -291,6 +337,7 @@ document.addEventListener("click",function(e){
   else if(t.id==="add")openAdd();
   else if(t.dataset.del){if(confirm("¿Borrar esta publicación para todos?")){var id=t.dataset.del;S.items=S.items.filter(function(i){return i.id!==id});S.dels.push(id);save();toast("Publicación borrada");draw();sync()}}
   else if(t.id==="notif")enableAlerts();
+  else if(t.id==="tourbtn")tour(0);
   else if(t.id==="goe"){document.getElementById("ov").innerHTML="";setEm(true,false)}
   else if(t.id==="cl")document.getElementById("ov").innerHTML="";
   else if(t.id==="emg"){if(S.mode==="emergency")setEm(false,false);else askEm()}
@@ -307,7 +354,7 @@ draw();sync();setInterval(sync,15000);
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(function(){});
 if(S.alerts&&"Notification" in window&&Notification.permission==="granted")pushSub();
 locate(function(ok){if(ok)draw()});
-if(!S.name)welcome();
+if(!S.name)welcome();else if(!S.toured)tour(0);
 })();
 </script>
 </body>
