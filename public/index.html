@@ -126,9 +126,9 @@ function seed(){
    ["rec","Necesitamos linternas y pilas","Energía","Para el comité del pasaje 3.",o(-.0045,.0015),[],NE]
   ];
   var t=Date.now();
-  return{mode:"normal",tab:"serv",name:"",zone:"",toured:false,dels:[],lastAlert:"",me:"u"+Math.random().toString(36).slice(2,9),pos:null,items:L.map(function(x,i){var e=x[6]||{};return{id:"t"+i,type:x[0],title:x[1],cat:x[2],desc:x[3],lat:x[4].lat,lng:x[4].lng,by:"Vecino",av:x[5],pend:false,ts:t-i*3600000,helpers:[],tel:"",zone:"*",kind:e.kind||"",emerg:!!e.emerg,status:"nuevo"}})}
+  return{mode:"normal",tab:"serv",name:"",zone:"",toured:false,token:"",admin:false,guest:false,dels:[],lastAlert:"",me:"u"+Math.random().toString(36).slice(2,9),pos:null,items:L.map(function(x,i){var e=x[6]||{};return{id:"t"+i,type:x[0],title:x[1],cat:x[2],desc:x[3],lat:x[4].lat,lng:x[4].lng,by:"Vecino",av:x[5],pend:false,ts:t-i*3600000,helpers:[],tel:"",zone:"*",kind:e.kind||"",emerg:!!e.emerg,status:"nuevo"}})}
 }
-S=load()||seed();S.dels=S.dels||[];S.lastAlert=S.lastAlert||"";S.zone=S.zone||"";
+S=load()||seed();S.dels=S.dels||[];S.lastAlert=S.lastAlert||"";S.zone=S.zone||"";S.token=S.token||"";S.admin=!!S.admin;S.guest=!!S.guest;
 function dist(a,b){var R=6371000,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lng-a.lng)*r;var h=Math.sin(dl/2)*Math.sin(dl/2)+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)*Math.sin(dn/2);return 2*R*Math.asin(Math.sqrt(h))}
 function me(){return S.pos||BASE}
 function fd(m){return m<1000?Math.max(10,Math.round(m/10)*10)+" m":(m/1000).toFixed(1)+" km"}
@@ -139,18 +139,23 @@ function locate(cb){
   if(!navigator.geolocation){cb&&cb();return}
   navigator.geolocation.getCurrentPosition(function(p){S.pos={lat:p.coords.latitude,lng:p.coords.longitude};save();cb&&cb(true)},function(){cb&&cb()},{timeout:6000,maximumAge:600000})
 }
+function H(){var h={"Content-Type":"application/json"};if(S.token)h.Authorization="Bearer "+S.token;return h}
+function api(path,obj,cb,err){fetch("api/"+path,{method:"POST",headers:H(),body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(cb).catch(err||function(){toast("Sin conexión con el servidor")})}
 function sync(){
+  if(!S.token){if(pend()){S.items.forEach(function(i){i.pend=false});save();draw()}return}
   if(!online())return;
   var n=pend(),before=JSON.stringify(S.items),sent=S.dels.slice();
-  fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:S.items,dels:sent,owner:S.me})}).then(function(r){return r.json()}).then(function(d){
+  fetch("api/sync",{method:"POST",headers:H(),body:JSON.stringify({items:S.items,dels:sent})}).then(function(r){
+    if(r.status===401){S.token="";save();toast("Tu sesión venció. Entra de nuevo.");auth("login");throw new Error("401")}
+    return r.json()
+  }).then(function(d){
     S.items=d.items.map(function(i){i.pend=false;i.helpers=i.helpers||[];i.av=i.av||[];return i});
+    if(d.me){S.admin=!!d.me.admin;S.zone=d.me.zone||S.zone;S.name=d.me.name||S.name}
     S.dels=S.dels.filter(function(x){return sent.indexOf(x)<0});save();
     if(n)toast("Se sincronizaron "+n+" publicaciones");
     if(d.alert)gotAlert(d.alert);
     if(n||before!==JSON.stringify(S.items))draw()
-  }).catch(function(){
-    if(pend()){S.items.forEach(function(i){i.pend=false});save();toast("Publicaciones guardadas en este teléfono");draw()}
-  })
+  }).catch(function(){})
 }
 function vib(){try{if(navigator.vibrate)navigator.vibrate([500,200,500,200,500,200,800])}catch(e){}}
 function showNote(t,b){
@@ -167,7 +172,7 @@ function gotAlert(a){
 function sendAlert(){
   var a={id:"a"+Date.now(),owner:S.me,msg:(S.name||"Un vecino")+" activó la emergencia. Abre la app para ayudar."};
   S.lastAlert=a.id;save();
-  fetch("api/alert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(a)}).then(function(r){return r.json()}).then(function(d){toast(d.ok?"Aviso enviado a tus vecinos":"Ya se envió un aviso hace instantes")}).catch(function(){toast("No se pudo avisar a los vecinos. Llama a emergencias.")})
+  fetch("api/alert",{method:"POST",headers:H(),body:JSON.stringify(a)}).then(function(r){return r.json()}).then(function(d){toast(d.ok?"Aviso enviado a tus vecinos":(d.error||"Ya se envió un aviso hace instantes"))}).catch(function(){toast("No se pudo avisar a los vecinos. Llama a emergencias.")})
 }
 function setEm(on,al){S.mode=on?"emergency":"normal";S.tab=on?"sos":"serv";save();if(on&&al)sendAlert();draw();window.scrollTo(0,0)}
 function askEm(){
@@ -182,7 +187,7 @@ function pushSub(){
   if(!("serviceWorker" in navigator)||!("PushManager" in window))return Promise.resolve(false);
   return fetch("api/config").then(function(r){return r.json()}).then(function(c){
     if(!c.key)return false;
-    return navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription().then(function(x){return x||reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(c.key)})})}).then(function(x){return fetch("api/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sub:x})}).then(function(){return true})})
+    return navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription().then(function(x){return x||reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(c.key)})})}).then(function(x){return fetch("api/subscribe",{method:"POST",headers:H(),body:JSON.stringify({sub:x})}).then(function(){return true})})
   }).catch(function(){return false})
 }
 function enableAlerts(){
@@ -214,7 +219,7 @@ function chipsHTML(cs,cur){return '<div class="chips">'+cs.map(function(c){retur
 function card(i,acts,badges){
   var ok=(i.type==="serv"||i.type==="prod")&&avN(i)>=3;
   var z=i.zone&&i.zone!=="*"?" · 📍 "+esc(i.zone):"";
-  return '<article class="card"><div class="top"><div class="ic" aria-hidden="true">'+icon(i.cat,i.type)+'</div><div class="sp"><h3>'+esc(i.title)+'</h3><div class="m">'+esc(i.cat)+" · a "+fd(i._d)+z+'</div></div></div><p style="margin:10px 0 0">'+esc(i.desc)+'</p><div>'+(ok?'<span class="badge vb">★ Visto Bueno Vecinal</span>':"")+(i.emerg&&i.cat!=="Emergencia"?'<span class="badge">🚨 Sirve en emergencias</span>':"")+(badges||"")+(i.pend?'<span class="badge w">Por enviar</span>':"")+'</div><div class="act">'+acts+contact(i)+'<a href="'+dirUrl(i)+'" target="_blank" rel="noopener" style="text-decoration:none"><button tabindex="-1">📍 Cómo llegar'+(i.type==="sos"?" (aprox.)":"")+'</button></a>'+(i.owner===S.me?'<button data-del="'+i.id+'" style="border-color:var(--sos);color:var(--sos)">🗑 Borrar</button>':"")+'</div></article>'
+  return '<article class="card"><div class="top"><div class="ic" aria-hidden="true">'+icon(i.cat,i.type)+'</div><div class="sp"><h3>'+esc(i.title)+'</h3><div class="m">'+esc(i.cat)+" · a "+fd(i._d)+z+'</div></div></div><p style="margin:10px 0 0">'+esc(i.desc)+'</p><div>'+(ok?'<span class="badge vb">★ Visto Bueno Vecinal</span>':"")+(i.emerg&&i.cat!=="Emergencia"?'<span class="badge">🚨 Sirve en emergencias</span>':"")+(badges||"")+(i.pend?'<span class="badge w">Por enviar</span>':"")+(i.hidden?'<span class="badge u">⚠️ Oculto por reportes</span>':"")+'</div><div class="act">'+acts+contact(i)+'<a href="'+dirUrl(i)+'" target="_blank" rel="noopener" style="text-decoration:none"><button tabindex="-1">📍 Cómo llegar'+(i.type==="sos"?" (aprox.)":"")+'</button></a>'+(i.owner===S.me||S.admin?'<button data-del="'+i.id+'" style="border-color:var(--sos);color:var(--sos)">🗑 Borrar</button>':"")+(S.token&&i.owner!==S.me?'<button class="sm" data-rep="'+i.id+'">🚩 Reportar</button>':"")+(S.admin&&i.hidden?'<button data-mod="'+i.id+'">✅ Restaurar</button>':"")+'</div></article>'
 }
 function voteBtn(i){
   if(i.owner===S.me)return '<span class="m">'+avN(i)+' recomiendan</span>';
@@ -308,7 +313,7 @@ function vInv(){
 }
 function vHelp(){
   var s=[["🔍","Busca","En Servicios encuentras oficios y productos de tu barrio, ordenados por cercanía. Toca Mapa para verlos con calles."],["★","Confía","Con 3 o más Vistos Buenos de vecinos, un servicio recibe la estrella dorada."],["🤝","Ayuda","En Favores presta, pide o intercambia sin dinero."],["＋","Publica en 3 toques","Toca Publicar, elige qué quieres hacer y toca Publicar otra vez."],["🚨","Emergencia","Activa el interruptor de arriba: solo verás servicios críticos y pedidos de ayuda."],["📶","Sin internet","Todo se guarda en tu teléfono y se envía solo cuando vuelve la conexión."]];
-  return '<h2>Cómo usar la app</h2><button class="p" id="tourbtn" style="width:100%;min-height:56px;margin:8px 0 14px">▶ Ver tutorial con voz</button>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act">'+(("Notification" in window&&Notification.permission==="granted")?'<span class="badge">🔔 Avisos activados</span>':'<button class="p" id="notif">🔔 Activar avisos de emergencia</button>')+'<button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="chz">📍 Cambiar mi barrio</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button></div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
+  return '<h2>Cómo usar la app</h2><button class="p" id="tourbtn" style="width:100%;min-height:56px;margin:8px 0 14px">▶ Ver tutorial con voz</button>'+s.map(function(x){return '<div class="card top"><div class="ic">'+x[0]+'</div><div><h3>'+x[1]+'</h3><div class="m">'+x[2]+'</div></div></div>'}).join("")+'<div class="act">'+(("Notification" in window&&Notification.permission==="granted")?'<span class="badge">🔔 Avisos activados</span>':'<button class="p" id="notif">🔔 Activar avisos de emergencia</button>')+'<button id="sim">'+(forceOff?"Volver a conectar":"Probar sin internet")+'</button><button id="chz">📍 Cambiar mi barrio</button><button id="loc">Actualizar mi ubicación</button><button id="rst">Borrar datos</button>'+(S.token?'<button id="out">Cerrar sesión</button>':'<button class="p" id="gotoauth">Crear cuenta o entrar</button>')+'</div><p class="m">Ubicación: '+(S.pos?"detectada":"zona de ejemplo (Arequipa)")+'.</p>'
 }
 function drawQR(){
   var b=document.getElementById("qr"),u=document.getElementById("u");
@@ -375,6 +380,49 @@ function tour(i){
   }
   say(st.t+". "+st.x)
 }
+function zoneOpts(){return ZONAS.map(function(z){return '<option'+(z===S.zone?" selected":"")+'>'+z+'</option>'}).join("")}
+function auth(mode){
+  var ov=document.getElementById("ov"),reg=mode!=="login";
+  ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Cuenta"><h2 style="margin-top:0">'+(reg?"Crea tu cuenta":"Entra a tu cuenta")+'</h2><div class="seg"><button id="am1" class="'+(reg?"on":"")+'">Crear cuenta</button><button id="am2" class="'+(reg?"":"on")+'">Ya tengo cuenta</button></div>'+(reg?'<label for="nm">Tu nombre o apodo</label><input id="nm" maxlength="30" autocomplete="name">':"")+'<label for="tl">Tu celular</label><input id="tl" type="tel" inputmode="tel" maxlength="16" placeholder="Ej.: 51987654321" autocomplete="tel"><label for="pn">PIN secreto (4 a 6 números)</label><input id="pn" type="password" inputmode="numeric" maxlength="6" autocomplete="'+(reg?"new-password":"current-password")+'">'+(reg?'<label for="zn">¿En qué barrio vives?</label><select id="zn">'+zoneOpts()+'</select><label for="nz">¿Otro barrio? Escríbelo (opcional)</label><input id="nz" maxlength="30"><p class="m">Tu celular solo sirve para entrar y no se muestra a nadie. Solo cuentan los Vistos Buenos de tu mismo barrio.</p>':"")+'<div id="amsg" class="m" role="alert" style="color:var(--sos);font-weight:700;min-height:26px"></div><button class="p" id="ago" style="width:100%;min-height:56px">'+(reg?"Crear cuenta y empezar":"Entrar")+'</button><button id="agst" style="width:100%;margin-top:10px">Usar sin cuenta (solo en este teléfono)</button></div></div>';
+  function v(id){return document.getElementById(id).value.trim()}
+  function msg(t){document.getElementById("amsg").textContent=t}
+  document.getElementById("am1").onclick=function(){auth("reg")};
+  document.getElementById("am2").onclick=function(){auth("login")};
+  document.getElementById("agst").onclick=function(){S.guest=true;save();ov.innerHTML="";if(!S.name||!S.zone)welcome();else{draw();if(!S.toured)tour(0)}};
+  document.getElementById("ago").onclick=function(){
+    var b={tel:v("tl"),pin:v("pn")};
+    if(reg){b.name=v("nm");b.zone=v("nz")||v("zn")}
+    msg("Conectando… si el servidor estaba dormido puede tardar un minuto.");
+    fetch("api/"+(reg?"register":"login"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d}})}).then(function(x){
+      if(!x.ok){msg(x.d.error||"No se pudo entrar");return}
+      S.token=x.d.token;S.guest=false;S.me=x.d.user.id;S.name=x.d.user.name;S.zone=x.d.user.zone;S.admin=!!x.d.user.admin;save();
+      ov.innerHTML="";S.tab="serv";draw();sync();if(!S.toured)tour(0)
+    }).catch(function(){msg("No hay conexión con el servidor. Espera un minuto e intenta otra vez.")})
+  }
+}
+function zoneDlg(){
+  var ov=document.getElementById("ov");
+  ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Barrio"><h2 style="margin-top:0">Cambiar mi barrio</h2><label for="zn">Barrio</label><select id="zn">'+zoneOpts()+'</select><label for="nz">¿Otro barrio? Escríbelo (opcional)</label><input id="nz" maxlength="30"><div class="row"><button class="p sp" id="zg" style="min-height:56px">Guardar</button><button id="zc">Cancelar</button></div></div></div>';
+  document.getElementById("zc").onclick=function(){ov.innerHTML=""};
+  document.getElementById("zg").onclick=function(){
+    S.zone=document.getElementById("nz").value.trim()||document.getElementById("zn").value;save();ov.innerHTML="";draw();
+    api("profile",{zone:S.zone},function(){toast("Barrio actualizado");sync()})
+  }
+}
+function reportDlg(id){
+  var ov=document.getElementById("ov"),R=["Es falso o es spam","Contenido ofensivo","Es peligroso o ilegal","Otro motivo"];
+  ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Reportar"><h2 style="margin-top:0">¿Por qué lo reportas?</h2><p class="m">Si 3 vecinos lo reportan, se oculta hasta que se revise.</p>'+R.map(function(r,k){return '<button class="big" data-r="'+k+'">'+r+'</button>'}).join("")+'<button class="big" id="rc" style="min-height:52px">Cancelar</button></div></div>';
+  document.getElementById("rc").onclick=function(){ov.innerHTML=""};
+  ov.querySelectorAll("[data-r]").forEach(function(b){b.onclick=function(){
+    ov.innerHTML="";
+    api("report",{id:id,reason:R[+b.dataset.r]},function(d){toast(d.ok?(d.hidden?"Gracias. Se ocultó por varios reportes":"Gracias. Lo revisaremos"):"No se pudo reportar");if(d.hidden)sync()})
+  }})
+}
+function logout(){
+  if(!confirm("¿Cerrar sesión en este teléfono?"))return;
+  api("logout",{},function(){},function(){});
+  var t=S.toured;S=seed();S.toured=t;save();draw();auth("login")
+}
 function welcome(){
   var ov=document.getElementById("ov");
   ov.innerHTML='<div class="modal"><div class="sheet" role="dialog" aria-label="Bienvenida"><h2 style="margin-top:0">¡Bienvenido, vecino!</h2><p class="m">Encuentra oficios y productos recomendados por tus vecinos, pide o da ayuda y avisa en emergencias. Funciona aunque no tengas internet.</p><label for="nm">¿Cómo te llamas?</label><input id="nm" maxlength="30" placeholder="Tu nombre o apodo" value="'+esc(S.name)+'"><label for="zn">¿En qué barrio vives?</label><select id="zn">'+ZONAS.map(function(z){return '<option'+(z===S.zone?" selected":"")+'>'+z+'</option>'}).join("")+'</select><label for="nz">¿Otro barrio? Escríbelo aquí (opcional)</label><input id="nz" maxlength="30"><p class="m">Solo cuentan los Vistos Buenos de vecinos de tu mismo barrio.</p><button class="p" id="go" style="width:100%;min-height:56px">Empezar</button></div></div>';
@@ -422,7 +470,11 @@ document.addEventListener("click",function(e){
   else if(t.dataset.us){usec=t.dataset.us;view="list";draw()}
   else if(t.dataset.sd){showDone=!showDone;draw()}
   else if(t.dataset.st){S.items.forEach(function(i){if(i.id===t.dataset.st&&(i.owner===S.me||i.helpers.indexOf(S.me)>=0))i.status="resuelto"});save();toast("Marcado como resuelto ✓");draw();sync()}
-  else if(t.id==="chz")welcome();
+  else if(t.id==="chz"){S.token?zoneDlg():welcome()}
+  else if(t.id==="gotoauth")auth("reg");
+  else if(t.id==="out")logout();
+  else if(t.dataset.rep)reportDlg(t.dataset.rep);
+  else if(t.dataset.mod){api("moderate",{id:t.dataset.mod},function(){toast("Publicación restaurada");sync()})}
   else if(t.dataset.av){S.items.forEach(function(i){if(i.id===t.dataset.av&&i.owner!==S.me&&canVote(i)&&i.av.indexOf(myKey())<0)i.av.push(myKey())});save();toast("Gracias por tu Visto Bueno");draw();sync()}
   else if(t.dataset.help){S.items.forEach(function(i){if(i.id===t.dataset.help){if(i.helpers.indexOf(S.me)<0)i.helpers.push(S.me);if((i.type==="sos"||i.type==="rec")&&stOf(i)==="nuevo")i.status="encamino"}});save();toast("Gracias. El vecino será avisado");draw();sync()}
   else if(t.id==="add")openAdd();
@@ -434,7 +486,7 @@ document.addEventListener("click",function(e){
   else if(t.id==="emg"){if(S.mode==="emergency")setEm(false,false);else askEm()}
   else if(t.id==="sim"){forceOff=!forceOff;if(!forceOff)sync();draw()}
   else if(t.id==="loc")locate(function(ok){toast(ok?"Ubicación actualizada":"No se pudo obtener la ubicación");draw()})
-  else if(t.id==="rst"){if(confirm("¿Borrar todo y volver a los datos de ejemplo?")){var n=S.name,z=S.zone;S=seed();S.name=n;S.zone=z;S.toured=true;save();draw()}}
+  else if(t.id==="rst"){if(confirm("¿Borrar todo y volver a los datos de ejemplo?")){var keep={name:S.name,zone:S.zone,token:S.token,me:S.me,admin:S.admin,guest:S.guest};S=seed();Object.assign(S,keep);S.toured=true;save();draw()}}
   else if(t.id==="cp"){var u=document.getElementById("u").value;(navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(function(){toast("Enlace copiado")},function(){document.getElementById("u").select();toast("Selecciona y copia el enlace")})}
   else if(t.id==="ins"&&installEv){installEv.prompt();installEv=null;draw()}
 });
@@ -445,7 +497,7 @@ draw();sync();setInterval(sync,15000);
 if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(function(){});
 if(S.alerts&&"Notification" in window&&Notification.permission==="granted")pushSub();
 locate(function(ok){if(ok)draw()});
-if(!S.name||!S.zone)welcome();else if(!S.toured)tour(0);
+if(!S.token&&!S.guest)auth("reg");else if(!S.name||!S.zone)welcome();else if(!S.toured)tour(0);
 })();
 </script>
 </body>
